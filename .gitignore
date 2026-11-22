@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .DS_Store
 .claude/
+.pytest_cache/
+results/quick/
+figures/quick/
+checkpoints/quick/

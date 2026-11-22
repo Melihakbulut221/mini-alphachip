@@ -1,105 +1,125 @@
-== baselines on chip-1000 (budget 16000 placements)
-{
-  "random_mean": 1.3986326553689237,
-  "random_best_of_budget": 1.0166771470443425,
-  "greedy": 0.9468823452269514,
-  "sa_best_of_3_seeds": 0.7840365445135037,
-  "sa_mean_of_3_seeds": 0.8015755555879838
-}
-== RL from scratch on the target chip
-[scratch] iter    1  mean cost 1.4237  best 1.1705  (2s)
-[scratch] iter   10  mean cost 1.3027  best 0.9995  (22s)
-[scratch] iter   20  mean cost 1.0342  best 0.8786  (45s)
-[scratch] iter   30  mean cost 0.9515  best 0.8552  (67s)
-[scratch] iter   40  mean cost 0.8982  best 0.8256  (89s)
-[scratch] iter   50  mean cost 0.8435  best 0.8124  (111s)
-[scratch] iter   60  mean cost 0.8134  best 0.8092  (133s)
-[scratch] iter   70  mean cost 0.8136  best 0.8092  (156s)
-[scratch] iter   80  mean cost 0.8123  best 0.8080  (178s)
-[scratch] iter   90  mean cost 0.8129  best 0.7988  (200s)
-[scratch] iter  100  mean cost 0.8060  best 0.7988  (222s)
-[scratch] iter  110  mean cost 0.8027  best 0.7988  (244s)
-[scratch] iter  120  mean cost 0.8000  best 0.7988  (267s)
-[scratch] iter  130  mean cost 0.8024  best 0.7961  (288s)
-[scratch] iter  140  mean cost 0.8019  best 0.7961  (310s)
-[scratch] iter  150  mean cost 0.8001  best 0.7961  (332s)
-[scratch] iter  160  mean cost 0.7996  best 0.7961  (353s)
-[scratch] iter  170  mean cost 0.7992  best 0.7961  (375s)
-[scratch] iter  180  mean cost 0.7997  best 0.7961  (396s)
-[scratch] iter  190  mean cost 0.8003  best 0.7961  (418s)
-[scratch] iter  200  mean cost 0.8004  best 0.7961  (440s)
-[scratch] iter  210  mean cost 0.8042  best 0.7961  (462s)
-[scratch] iter  220  mean cost 0.8042  best 0.7961  (485s)
-[scratch] iter  230  mean cost 0.7997  best 0.7961  (507s)
-[scratch] iter  240  mean cost 0.8004  best 0.7961  (529s)
-[scratch] iter  250  mean cost 0.8000  best 0.7961  (551s)
-== pre-training on 64 netlists
-[pretrain] iter    1  mean cost 1.4545  best 1.2175  (2s)
-[pretrain] iter   10  mean cost 1.3588  best 0.9994  (22s)
-[pretrain] iter   20  mean cost 1.1519  best 0.7728  (45s)
-[pretrain] iter   30  mean cost 1.0911  best 0.7728  (67s)
-[pretrain] iter   40  mean cost 1.0616  best 0.7163  (89s)
-[pretrain] iter   50  mean cost 1.0647  best 0.6751  (111s)
-[pretrain] iter   60  mean cost 1.0380  best 0.6751  (132s)
-[pretrain] iter   70  mean cost 1.0467  best 0.6751  (154s)
-[pretrain] iter   80  mean cost 1.0328  best 0.6751  (176s)
-[pretrain] iter   90  mean cost 1.0441  best 0.6751  (198s)
-[pretrain] iter  100  mean cost 1.0096  best 0.6751  (219s)
-[pretrain] iter  110  mean cost 0.9998  best 0.6751  (241s)
-[pretrain] iter  120  mean cost 1.0267  best 0.6751  (263s)
-[pretrain] iter  130  mean cost 1.0029  best 0.6751  (285s)
-[pretrain] iter  140  mean cost 1.0137  best 0.6751  (307s)
-[pretrain] iter  150  mean cost 1.0189  best 0.6751  (329s)
-[pretrain] iter  160  mean cost 0.9997  best 0.6751  (350s)
-[pretrain] iter  170  mean cost 1.0354  best 0.6751  (372s)
-[pretrain] iter  180  mean cost 1.0126  best 0.6751  (394s)
-[pretrain] iter  190  mean cost 1.0125  best 0.6751  (416s)
-[pretrain] iter  200  mean cost 1.0090  best 0.6751  (438s)
-[pretrain] iter  210  mean cost 1.0071  best 0.6742  (460s)
-[pretrain] iter  220  mean cost 1.0015  best 0.6720  (482s)
-[pretrain] iter  230  mean cost 1.0248  best 0.6720  (504s)
-[pretrain] iter  240  mean cost 1.0163  best 0.6720  (525s)
-[pretrain] iter  250  mean cost 1.0001  best 0.6720  (547s)
-[pretrain] iter  260  mean cost 1.0087  best 0.6720  (569s)
-[pretrain] iter  270  mean cost 0.9960  best 0.6720  (591s)
-[pretrain] iter  280  mean cost 1.0158  best 0.6698  (612s)
-[pretrain] iter  290  mean cost 0.9889  best 0.6698  (634s)
-[pretrain] iter  300  mean cost 1.0168  best 0.6698  (656s)
-zero-shot: {'greedy_decode': 0.9698358320308014, 'best_of_64_samples': 0.8899470525096689}
-== fine-tuning the pre-trained policy on the target chip
-[finetune] iter    1  mean cost 0.9403  best 0.8938  (2s)
-[finetune] iter   10  mean cost 0.8861  best 0.8671  (22s)
-[finetune] iter   20  mean cost 0.8743  best 0.8603  (44s)
-[finetune] iter   30  mean cost 0.8643  best 0.8595  (66s)
-[finetune] iter   40  mean cost 0.8414  best 0.8394  (87s)
-[finetune] iter   50  mean cost 0.8442  best 0.8316  (109s)
-[finetune] iter   60  mean cost 0.8418  best 0.8316  (131s)
-[finetune] iter   70  mean cost 0.8265  best 0.8217  (153s)
-[finetune] iter   80  mean cost 0.8245  best 0.8217  (174s)
-[finetune] iter   90  mean cost 0.8215  best 0.8185  (196s)
-[finetune] iter  100  mean cost 0.8214  best 0.8185  (218s)
-[finetune] iter  110  mean cost 0.8212  best 0.8158  (239s)
-[finetune] iter  120  mean cost 0.8182  best 0.8158  (261s)
-[finetune] iter  130  mean cost 0.8258  best 0.8158  (283s)
-[finetune] iter  140  mean cost 0.8174  best 0.8125  (305s)
-[finetune] iter  150  mean cost 0.8187  best 0.8125  (327s)
-[finetune] iter  160  mean cost 0.8174  best 0.8125  (349s)
-[finetune] iter  170  mean cost 0.8218  best 0.8125  (371s)
-[finetune] iter  180  mean cost 0.8221  best 0.8125  (392s)
-[finetune] iter  190  mean cost 0.8202  best 0.8125  (414s)
-[finetune] iter  200  mean cost 0.8221  best 0.8125  (436s)
-[finetune] iter  210  mean cost 0.8214  best 0.8125  (457s)
-[finetune] iter  220  mean cost 0.8202  best 0.8125  (479s)
-[finetune] iter  230  mean cost 0.8226  best 0.8125  (500s)
-[finetune] iter  240  mean cost 0.8199  best 0.8125  (522s)
-[finetune] iter  250  mean cost 0.8387  best 0.8125  (544s)
-== zero-shot on held-out chips
-{'chip': 'chip-1000', 'random_mean': 1.3890976236437695, 'random_best_of_64': 1.0615124755261909, 'greedy': 0.9468823452269514, 'rl_zero_shot_greedy': 0.9698358320308014, 'rl_zero_shot_best_of_64': 0.8854594969412268}
-{'chip': 'chip-1001', 'random_mean': 1.4083297056720196, 'random_best_of_64': 1.1463212745036544, 'greedy': 0.9117935602926366, 'rl_zero_shot_greedy': 0.9134622839763058, 'rl_zero_shot_best_of_64': 0.8622189546882503}
-{'chip': 'chip-1002', 'random_mean': 1.4016144385547822, 'random_best_of_64': 1.0690448398520866, 'greedy': 0.7831162263572297, 'rl_zero_shot_greedy': 0.8480204861415694, 'rl_zero_shot_best_of_64': 0.8396311902522736}
-{'chip': 'chip-1003', 'random_mean': 1.395294376472724, 'random_best_of_64': 1.1757609947186247, 'greedy': 0.8797428894823365, 'rl_zero_shot_greedy': 0.8995170192604964, 'rl_zero_shot_best_of_64': 0.8672255984288242}
-{'chip': 'chip-1004', 'random_mean': 1.4223454926321382, 'random_best_of_64': 1.1400223397549212, 'greedy': 0.9828544294760599, 'rl_zero_shot_greedy': 0.9812561478091918, 'rl_zero_shot_best_of_64': 0.9283955552427171}
-{'chip': 'chip-1005', 'random_mean': 1.4156502127856796, 'random_best_of_64': 1.2292739326556377, 'greedy': 0.9701314517899488, 'rl_zero_shot_greedy': 1.0383469532107685, 'rl_zero_shot_best_of_64': 0.9825093539908163}
-{'chip': 'chip-1006', 'random_mean': 1.510052271966817, 'random_best_of_64': 1.3025731278173336, 'greedy': 1.0599708645989954, 'rl_zero_shot_greedy': 0.995524250351641, 'rl_zero_shot_best_of_64': 0.9862793558126288}
-{'chip': 'chip-1007', 'random_mean': 1.4665040976317019, 'random_best_of_64': 1.2445307871994031, 'greedy': 1.2368036758967516, 'rl_zero_shot_greedy': 1.1624852022082843, 'rl_zero_shot_best_of_64': 1.0173790347026566}
-done in 29.8 min
+== baselines (budget: 12800 placements per method)
+   random mean 1.401, best of budget 0.930 | greedy 1.003 | SA mean 0.803, best chain 0.795
+== stage 1: 9 training runs on 9 worker processes
+[scratch_s1] iter    1  mean 1.4078  best 1.1377      2s
+[pretrain_4] iter    1  mean 1.4442  best 1.1054      2s
+[pretrain_64] iter    1  mean 1.4709  best 1.2414      2s
+[scratch_s2] iter    1  mean 1.4235  best 1.1573      2s
+[scratch_s0] iter    1  mean 1.4075  best 1.1200      3s
+[nowire_s0] iter    1  mean 1.4047  best 1.1200      3s
+[nowire_s1] iter    1  mean 1.4077  best 1.1377      3s
+[nowire_s2] iter    1  mean 1.4199  best 1.1573      3s
+[pretrain_16] iter    1  mean 1.4665  best 1.1656      3s
+[scratch_s1] iter   25  mean 0.9517  best 0.8742     64s
+[pretrain_4] iter   25  mean 1.0103  best 0.8482     64s
+[nowire_s2] iter   25  mean 1.2770  best 1.0176     65s
+[nowire_s0] iter   25  mean 1.2755  best 1.0057     65s
+[pretrain_64] iter   25  mean 1.0957  best 0.8651     65s
+[scratch_s2] iter   25  mean 0.9508  best 0.8410     65s
+[pretrain_16] iter   25  mean 1.0914  best 0.8255     65s
+[nowire_s1] iter   25  mean 1.2625  best 0.9841     65s
+[scratch_s0] iter   25  mean 0.9528  best 0.8625     65s
+[scratch_s1] iter   50  mean 0.8971  best 0.8430    138s
+[pretrain_4] iter   50  mean 0.9376  best 0.8311    138s
+[nowire_s2] iter   50  mean 1.2110  best 0.9571    138s
+[nowire_s0] iter   50  mean 1.2116  best 0.9295    138s
+[pretrain_64] iter   50  mean 1.0175  best 0.8005    139s
+[pretrain_16] iter   50  mean 1.0245  best 0.7730    139s
+[nowire_s1] iter   50  mean 1.2038  best 0.9764    139s
+[scratch_s2] iter   50  mean 0.8904  best 0.8285    139s
+[scratch_s0] iter   50  mean 0.8658  best 0.8211    139s
+[scratch_s1] iter   75  mean 0.8424  best 0.8389    216s
+[nowire_s2] iter   75  mean 1.1228  best 0.9336    216s
+[pretrain_4] iter   75  mean 0.9082  best 0.8267    216s
+[nowire_s0] iter   75  mean 1.1581  best 0.9295    217s
+[nowire_s1] iter   75  mean 1.0248  best 0.9297    217s
+[pretrain_64] iter   75  mean 1.0109  best 0.7440    217s
+[pretrain_16] iter   75  mean 0.9767  best 0.7669    217s
+[scratch_s0] iter   75  mean 0.7985  best 0.7980    217s
+[scratch_s2] iter   75  mean 0.8054  best 0.8051    217s
+[nowire_s2] iter  100  mean 0.9864  best 0.9336    291s
+[pretrain_4] iter  100  mean 0.9021  best 0.8025    291s
+[scratch_s1] iter  100  mean 0.8424  best 0.8389    291s
+[nowire_s0] iter  100  mean 1.0049  best 0.9295    292s
+[nowire_s1] iter  100  mean 0.9824  best 0.9297    292s
+[pretrain_16] iter  100  mean 0.9553  best 0.7480    292s
+[pretrain_64] iter  100  mean 0.9339  best 0.7440    292s
+[scratch_s0] iter  100  mean 0.8083  best 0.7980    293s
+[scratch_s2] iter  100  mean 0.8051  best 0.8051    293s
+[nowire_s2] iter  125  mean 0.9821  best 0.9336    365s
+[pretrain_4] iter  125  mean 0.8613  best 0.8025    365s
+[scratch_s1] iter  125  mean 0.8424  best 0.8389    365s
+[nowire_s0] iter  125  mean 0.9355  best 0.9148    366s
+[nowire_s1] iter  125  mean 0.9800  best 0.9297    366s
+[pretrain_16] iter  125  mean 0.9381  best 0.7424    366s
+[pretrain_64] iter  125  mean 1.0347  best 0.7440    367s
+[scratch_s0] iter  125  mean 0.7980  best 0.7963    367s
+[scratch_s2] iter  125  mean 0.8051  best 0.8016    367s
+[nowire_s2] iter  150  mean 0.9818  best 0.9336    438s
+[pretrain_4] iter  150  mean 0.8716  best 0.8025    439s
+[scratch_s1] iter  150  mean 0.8440  best 0.8389    439s
+[nowire_s0] iter  150  mean 0.9241  best 0.9148    440s
+[pretrain_16] iter  150  mean 0.9833  best 0.7424    440s
+[nowire_s1] iter  150  mean 0.9800  best 0.9297    440s
+[pretrain_64] iter  150  mean 1.0117  best 0.7374    440s
+[scratch_s2] iter  150  mean 0.8016  best 0.8016    441s
+[scratch_s0] iter  150  mean 0.7980  best 0.7963    441s
+[nowire_s2] iter  175  mean 0.9808  best 0.9336    512s
+[pretrain_4] iter  175  mean 0.8497  best 0.8025    512s
+[scratch_s1] iter  175  mean 0.8425  best 0.8389    513s
+[pretrain_16] iter  175  mean 0.9169  best 0.7424    514s
+[nowire_s1] iter  175  mean 0.9825  best 0.9297    514s
+[nowire_s0] iter  175  mean 0.9083  best 0.9081    514s
+[pretrain_64] iter  175  mean 0.9853  best 0.7374    514s
+[scratch_s0] iter  175  mean 0.7980  best 0.7963    515s
+[scratch_s2] iter  175  mean 0.8016  best 0.8016    515s
+[nowire_s2] iter  200  mean 1.0559  best 0.9336    586s
+[pretrain_4] iter  200  mean 0.8428  best 0.8025    586s
+[scratch_s1] iter  200  mean 0.8414  best 0.8389    587s
+[nowire_s1] iter  200  mean 0.9880  best 0.9297    587s
+[pretrain_16] iter  200  mean 0.9723  best 0.7424    588s
+[nowire_s0] iter  200  mean 0.9095  best 0.9081    588s
+[pretrain_64] iter  200  mean 1.0431  best 0.7374    588s
+[scratch_s0] iter  200  mean 0.7980  best 0.7963    588s
+[scratch_s2] iter  200  mean 0.8016  best 0.8002    589s
+[pretrain_4] iter  225  mean 0.8541  best 0.8025    629s
+[pretrain_16] iter  225  mean 0.9462  best 0.7424    630s
+[pretrain_64] iter  225  mean 1.0269  best 0.7374    630s
+[pretrain_4] iter  250  mean 0.8688  best 0.8025    671s
+[pretrain_16] iter  250  mean 0.9383  best 0.7424    671s
+[pretrain_64] iter  250  mean 0.9583  best 0.7374    672s
+[pretrain_4] iter  275  mean 0.8622  best 0.8025    712s
+[pretrain_16] iter  275  mean 0.9314  best 0.7424    713s
+[pretrain_64] iter  275  mean 0.9921  best 0.7374    713s
+[pretrain_4] iter  300  mean 0.8488  best 0.8025    753s
+[pretrain_16] iter  300  mean 0.8894  best 0.7424    754s
+[pretrain_64] iter  300  mean 0.9613  best 0.7374    754s
+== stage 2: fine-tuning checkpoints/pretrained_64.pt on chip-1000
+[finetune_s0] iter    1  mean 0.9333  best 0.8803      2s
+[finetune_s1] iter    1  mean 0.9347  best 0.8854      2s
+[finetune_s2] iter    1  mean 0.9396  best 0.9045      2s
+[finetune_s0] iter   25  mean 0.8676  best 0.8588     42s
+[finetune_s2] iter   25  mean 0.8792  best 0.8586     42s
+[finetune_s1] iter   25  mean 0.8794  best 0.8575     42s
+[finetune_s0] iter   50  mean 0.8551  best 0.8551     83s
+[finetune_s2] iter   50  mean 0.8714  best 0.8481     83s
+[finetune_s1] iter   50  mean 0.8454  best 0.8410     83s
+[finetune_s0] iter   75  mean 0.8551  best 0.8527    125s
+[finetune_s2] iter   75  mean 0.8496  best 0.8481    125s
+[finetune_s1] iter   75  mean 0.8505  best 0.8410    125s
+[finetune_s0] iter  100  mean 0.8541  best 0.8527    168s
+[finetune_s2] iter  100  mean 0.8498  best 0.8481    168s
+[finetune_s1] iter  100  mean 0.8440  best 0.8410    168s
+[finetune_s0] iter  125  mean 0.8527  best 0.8515    210s
+[finetune_s2] iter  125  mean 0.8496  best 0.8481    210s
+[finetune_s1] iter  125  mean 0.8415  best 0.8403    210s
+[finetune_s0] iter  150  mean 0.8503  best 0.8503    252s
+[finetune_s2] iter  150  mean 0.8705  best 0.8481    252s
+[finetune_s1] iter  150  mean 0.8418  best 0.8384    252s
+[finetune_s0] iter  175  mean 0.8950  best 0.8423    294s
+[finetune_s2] iter  175  mean 0.8705  best 0.8481    294s
+[finetune_s1] iter  175  mean 0.8384  best 0.8384    294s
+[finetune_s0] iter  200  mean 0.8903  best 0.8423    336s
+[finetune_s2] iter  200  mean 0.8707  best 0.8481    336s
+[finetune_s1] iter  200  mean 0.8386  best 0.8384    336s
+== done in 18.4 min -> results/results.json

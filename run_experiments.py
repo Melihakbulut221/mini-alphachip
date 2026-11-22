@@ -1,150 +1,101 @@
-"""Reproduces the paper's three headline experiments in miniature, on a laptop CPU:
+"""The paper's headline experiments in miniature, on laptop CPU cores.
 
-  1. RL from scratch on one unseen "chip" vs random / greedy / simulated annealing
-  2. Pre-train on a corpus of netlists, then zero-shot + fine-tune on the unseen chip
-     (the paper's Fig. 3/4: pre-training -> better start, faster convergence)
-  3. Zero-shot generalisation of the pre-trained policy across held-out chips
+  A. One unseen chip, equal search budget for everyone:
+     random search, greedy, simulated annealing (8 chains), RL from scratch (3 seeds),
+     RL pre-trained on other chips then fine-tuned (3 seeds).
+  B. Zero-shot transfer: the pre-trained policy on 20 chips it has never seen, with no
+     training on them, as a function of how many chips it was pre-trained on (4 / 16 / 64).
+  C. Ablation: RL from scratch without the wire-mask input feature.
 
-Usage:  python run_experiments.py            (~30 min on a 4-core laptop)
-        python run_experiments.py --quick    (smoke test, ~2 min)
+    python run_experiments.py            # ~15 min on a 10-core laptop
+    python run_experiments.py --quick    # smoke test, ~1 min
+
+Hyper-parameters (learning rate, entropy bonus, annealing temperature) were chosen on a separate
+development chip (chip-900), never on the chips reported here.
 """
 from __future__ import annotations
 
 import argparse
-import copy
 import json
+import os
 import time
 from pathlib import Path
 
 import numpy as np
 import torch
 
-from minichip.baselines import greedy_placement, random_placement, simulated_annealing
-from minichip.env import placement_cost
-from minichip.model import PlacementPolicy
+from minichip.baselines import greedy_placement, random_placements, simulated_annealing
+from minichip.jobs import BATCH, run_parallel
 from minichip.netlist import random_netlist
-from minichip.ppo import rollout, train
-from minichip.viz import curves_figure, placement_gif, placements_figure
 
-ap = argparse.ArgumentParser()
-ap.add_argument("--quick", action="store_true")
-ap.add_argument("--seed", type=int, default=0)
-args = ap.parse_args()
-
-ITERS = 12 if args.quick else 250           # RL iterations on the target chip
-PRETRAIN_ITERS = 12 if args.quick else 300  # iterations over the training corpus
-BATCH = 64                                  # placements per iteration
-N_TRAIN = 64                                # netlists in the pre-training corpus
-HELD_OUT = list(range(1000, 1004 if args.quick else 1008))
-TARGET = 1000                               # "chip-1000" is never seen in pre-training
-BUDGET = ITERS * BATCH                      # same #placement evaluations for every search method
-
-torch.manual_seed(args.seed)
-rng = np.random.default_rng(args.seed)
-out, figs, ckpt = Path("results"), Path("figures"), Path("checkpoints")
-for p in (out, figs, ckpt):
-    p.mkdir(exist_ok=True)
-
-target = random_netlist(TARGET)
-corpus = [random_netlist(s) for s in range(N_TRAIN)]
-results = {"budget_placements": BUDGET, "target": target.name}
-t_all = time.time()
+TARGET = 1000                       # the unseen chip of experiment A
+HELD_OUT = list(range(1000, 1020))  # experiment B; netlist seeds 0..63 are the training corpus
+CORPUS_SIZES = (4, 16, 64)
+SEEDS = (0, 1, 2)
+SA_CHAINS = 8
+SA_T_MAX, SA_T_MIN = 0.05, 3e-4
+FINETUNE = dict(entropy_coef=0.01, lr=3e-4)
 
 
-def cost(nl, a):
-    return placement_cost(nl, a)["cost"]
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--quick", action="store_true", help="tiny run to check that everything works")
+    ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
+    args = ap.parse_args()
+    iters, pre_iters = (6, 6) if args.quick else (200, 300)
+    held_out = HELD_OUT[:3] if args.quick else HELD_OUT
+    budget = iters * BATCH
+    out = Path("results/quick" if args.quick else "results")
+    ckpt = Path("checkpoints/quick" if args.quick else "checkpoints")
+    out.mkdir(parents=True, exist_ok=True)
+    ckpt.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    grid = list(range(1, BATCH + 1)) + list(range(2 * BATCH, budget + 1, BATCH))  # x axis of all curves
+    res = {"target": TARGET, "budget": budget, "evals": grid, "held_out": held_out}
+
+    # ------------------------------------------------------------------ baselines
+    print(f"== baselines (budget: {budget} placements per method)", flush=True)
+    target = random_netlist(TARGET)
+    gen = torch.Generator().manual_seed(0)
+    r_anchors, r_cost = random_placements(target, budget, gen)
+    r_curve = np.minimum.accumulate(r_cost["cost"].numpy())
+    g_anchors, g_cost = greedy_placement(target)
+    sa_anchors, sa_cost, sa_curve = simulated_annealing(target, budget - 1, SA_CHAINS, gen, t_max=SA_T_MAX, t_min=SA_T_MIN)
+    idx = np.array(grid) - 1
+    res["random"] = {"mean": r_cost["cost"].mean().item(), "curve": r_curve[idx].tolist(),
+                     "example_anchors": r_anchors[0].tolist()}
+    res["greedy"] = {"cost": g_cost["cost"], "anchors": g_anchors.tolist()}
+    res["sa"] = {"final": sa_cost.tolist(), "curves": sa_curve[:, idx].tolist(),
+                 "best_anchors": sa_anchors[sa_cost.argmin()].tolist()}
+    res["held_out_baselines"] = {}
+    for s in held_out:
+        nl = random_netlist(s)
+        res["held_out_baselines"][str(s)] = {
+            "random_mean": random_placements(nl, 256, gen)[1]["cost"].mean().item(),
+            "greedy": greedy_placement(nl)[1]["cost"]}
+    print(f"   random mean {res['random']['mean']:.3f}, best of budget {r_curve[-1]:.3f} | "
+          f"greedy {g_cost['cost']:.3f} | SA mean {sa_cost.mean():.3f}, best chain {sa_cost.min():.3f}", flush=True)
+
+    # ------------------------------------------------------------------ stage 1: independent runs
+    stage1 = [dict(name=f"pretrain_{n}", seed=0, chips=list(range(n)), iterations=pre_iters,
+                   save=str(ckpt / f"pretrained_{n}.pt"), eval_chips=held_out) for n in CORPUS_SIZES[::-1]]
+    stage1 += [dict(name=f"scratch_s{s}", seed=s, chips=[TARGET], iterations=iters) for s in SEEDS]
+    stage1 += [dict(name=f"nowire_s{s}", seed=s, chips=[TARGET], iterations=iters, use_wire_mask=False)
+               for s in SEEDS]
+    print(f"== stage 1: {len(stage1)} training runs on {args.workers} worker processes", flush=True)
+    res["runs"] = run_parallel(stage1, args.workers)
+
+    # ------------------------------------------------------------------ stage 2: fine-tuning
+    best_pre = str(ckpt / f"pretrained_{CORPUS_SIZES[-1]}.pt")
+    stage2 = [dict(name=f"finetune_s{s}", seed=s, chips=[TARGET], iterations=iters, init=best_pre,
+                   save=str(ckpt / f"finetuned_s{s}.pt"), **FINETUNE) for s in SEEDS]
+    print(f"== stage 2: fine-tuning {best_pre} on chip-{TARGET}", flush=True)
+    res["runs"].update(run_parallel(stage2, args.workers))
+
+    res["minutes"] = (time.time() - t0) / 60
+    (out / "results.json").write_text(json.dumps(res))
+    print(f"== done in {res['minutes']:.1f} min -> {out / 'results.json'}", flush=True)
 
 
-# ---------------------------------------------------------------- 1. baselines on the target
-print(f"== baselines on {target.name} (budget {BUDGET} placements)")
-rand = [random_placement(target, rng) for _ in range(BUDGET)]
-rand_costs = np.array([cost(target, a) for a in rand])
-greedy = greedy_placement(target)
-sa_runs = [simulated_annealing(target, BUDGET, np.random.default_rng(100 + s)) for s in range(3)]
-sa_best = min(sa_runs, key=lambda r: r[1][-1])
-results["baselines"] = {
-    "random_mean": float(rand_costs.mean()),
-    "random_best_of_budget": float(rand_costs.min()),
-    "greedy": float(cost(target, greedy)),
-    "sa_best_of_3_seeds": float(sa_best[1][-1]),
-    "sa_mean_of_3_seeds": float(np.mean([r[1][-1] for r in sa_runs])),
-}
-print(json.dumps(results["baselines"], indent=2))
-
-# ---------------------------------------------------------------- 2a. RL from scratch
-print("== RL from scratch on the target chip")
-scratch = PlacementPolicy()
-h_scratch, best_scratch, a_scratch = train(scratch, lambda b: [target] * b, ITERS, BATCH, label="scratch")
-
-# ---------------------------------------------------------------- 2b. pre-train -> fine-tune
-pre_path = ckpt / "pretrained.pt"
-print(f"== pre-training on {N_TRAIN} netlists")
-pre = PlacementPolicy()
-h_pre, _, _ = train(pre, lambda b: [corpus[i] for i in rng.integers(N_TRAIN, size=b)],
-                    PRETRAIN_ITERS, BATCH, label="pretrain")
-torch.save(pre.state_dict(), pre_path)
-
-pre.eval()
-_, zs_greedy, a_zs, _ = rollout(pre, [target], greedy=True)
-_, zs_samples, _, _ = rollout(pre, [target] * BATCH)
-results["zero_shot"] = {"greedy_decode": float(zs_greedy[0]), "best_of_64_samples": float(zs_samples.min())}
-print("zero-shot:", results["zero_shot"])
-
-print("== fine-tuning the pre-trained policy on the target chip")
-ft = copy.deepcopy(pre)
-ft.train()
-h_ft, best_ft, a_ft = train(ft, lambda b: [target] * b, ITERS, BATCH, label="finetune")
-results["rl"] = {
-    "scratch_best": best_scratch,
-    "finetune_best": best_ft,
-    "scratch_curve_best": h_scratch["best_cost"],
-    "finetune_curve_best": h_ft["best_cost"],
-    "scratch_curve_mean": h_scratch["mean_cost"],
-    "finetune_curve_mean": h_ft["mean_cost"],
-}
-
-# ---------------------------------------------------------------- 3. zero-shot generalisation
-print("== zero-shot on held-out chips")
-gen = []
-for s in HELD_OUT:
-    nl = random_netlist(s)
-    _, zg, _, _ = rollout(pre, [nl], greedy=True)
-    _, zb, _, _ = rollout(pre, [nl] * BATCH)
-    r = np.array([cost(nl, random_placement(nl, rng)) for _ in range(BATCH)])
-    gen.append({"chip": nl.name, "random_mean": float(r.mean()), "random_best_of_64": float(r.min()),
-                "greedy": float(cost(nl, greedy_placement(nl))),
-                "rl_zero_shot_greedy": float(zg[0]), "rl_zero_shot_best_of_64": float(zb.min())})
-    print(gen[-1])
-results["zero_shot_generalisation"] = gen
-
-# ---------------------------------------------------------------- figures
-ev = np.array(h_scratch["evals"])
-curves_figure(
-    {"RL from scratch": (ev, h_scratch["best_cost"]),
-     "RL pre-trained + fine-tuned": (ev, h_ft["best_cost"]),
-     "simulated annealing (best of 3)": (np.arange(1, BUDGET + 1), sa_best[1])},
-    {"greedy": results["baselines"]["greedy"],
-     "random (best of budget)": results["baselines"]["random_best_of_budget"]},
-    figs / "convergence.png",
-    f"{target.name} (unseen during pre-training): best cost vs. search budget")
-
-curves_figure(
-    {"RL from scratch": (ev, h_scratch["mean_cost"]),
-     "RL pre-trained + fine-tuned": (ev, h_ft["mean_cost"])},
-    {"random policy (mean)": results["baselines"]["random_mean"]},
-    figs / "policy_mean_cost.png",
-    "average cost of the policy's sampled placements (what the agent has learned)")
-
-placements_figure(target, {
-    "Random (typical)": rand[0],
-    "Greedy (wirelength)": greedy,
-    "Simulated annealing": sa_best[0],
-    "RL zero-shot (no training on this chip)": a_zs[0],
-    "RL pre-trained + fine-tuned": a_ft,
-}, figs / "placements.png")
-
-placement_gif(target, a_ft, target.placement_order(), figs / "agent.gif")
-
-results["wall_clock_minutes"] = (time.time() - t_all) / 60
-(out / "results.json").write_text(json.dumps(results, indent=1))
-print(f"done in {results['wall_clock_minutes']:.1f} min")
+if __name__ == "__main__":
+    main()

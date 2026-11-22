@@ -1,183 +1,223 @@
-"""Macro placement as an MDP, following Mirhoseini et al. (Nature 2021):
+"""Macro placement as a Markov decision process (Mirhoseini et al., Nature 2021), batched.
 
-* state  - partial placement + netlist graph + which macro comes next
-* action - a grid cell for the current macro (infeasible cells are masked out)
-* reward - 0 at every step, and at the end  -(wirelength + lambda * congestion)
-           (density is a hard constraint: overlapping placements are masked, never sampled)
+  state   partial placement + netlist graph + the macro to place next
+  action  a grid cell for that macro's lower-left corner; cells that would overlap an
+          already placed macro or leave the canvas are masked out (density = hard constraint)
+  reward  0 at every step; after the last macro  -(wirelength + lambda * congestion)
+
+Everything here operates on a `Batch`: B placements are simulated and scored in parallel with
+plain tensor ops, and RL, simulated annealing and the simple baselines share this one cost model.
 """
 from __future__ import annotations
 
-import numpy as np
+import torch
 
-from .netlist import Netlist
+from .netlist import Batch
 
-CONGESTION_WEIGHT = 0.5      # lambda in the paper's eq. (2) (scaled to our normalisation)
-TRACKS_PER_CELL = 4.0        # routing capacity (tracks) of a free cell
-MACRO_TRACK_FRACTION = 0.5   # macros block half of the routing resources above them
-N_GRID_CHANNELS = 8
-
-
-# ----------------------------------------------------------------------------- cost model
-def node_positions(nl: Netlist, anchors: np.ndarray) -> np.ndarray:
-    """Centres of all nodes. anchors: (M, 2) lower-left cell of each macro (-1 = unplaced)."""
-    pos = np.empty((nl.n_nodes, 2))
-    pos[: nl.n_macros] = anchors + nl.sizes / 2.0
-    pos[nl.n_macros:] = nl.port_xy
-    return pos
+LAMBDA_CONGESTION = 0.5   # weight of congestion relative to wirelength (eq. 2 in the paper)
+TRACKS_PER_CELL = 4.0     # routing supply of an empty grid cell
+MACRO_BLOCKAGE = 0.5      # a macro blocks this fraction of the routing tracks above it
+TOP_FRACTION = 0.10       # congestion = mean of the 10% most congested values (paper: "top 10%")
+GRID_CHANNELS = 8
+NODE_FEATURES = 7
+_FAR = 1e6
 
 
-def hpwl(nl: Netlist, pos: np.ndarray, placed: np.ndarray | None = None) -> float:
-    """Half-perimeter wirelength, normalised by (#nets * grid) like the paper's eq. (5).
-    With `placed` given, only already-placed pins count (used by the greedy baseline)."""
-    total = 0.0
-    for net in nl.nets:
-        if placed is not None:
-            net = net[placed[net]]
-            if len(net) < 2:
-                continue
-        p = pos[net]
-        total += np.ptp(p[:, 0]) + np.ptp(p[:, 1])
-    return total / (len(nl.nets) * nl.grid)
+# ------------------------------------------------------------------------------ geometry
+def centres(b: Batch, anchors: torch.Tensor) -> torch.Tensor:
+    """(B, N, 2) positions of all pins: macro centres followed by the fixed ports."""
+    return torch.cat([anchors.float() + b.sizes.float() / 2, b.port_xy], dim=1)
 
 
-def occupancy(nl: Netlist, anchors: np.ndarray, placed: np.ndarray) -> np.ndarray:
-    occ = np.zeros((nl.grid, nl.grid), dtype=np.float32)  # occ[y, x]
-    for m in np.flatnonzero(placed[: nl.n_macros]):
-        x, y = anchors[m]
-        w, h = nl.sizes[m]
-        occ[y:y + h, x:x + w] = 1.0
-    return occ
+def rasterize(b: Batch, anchors: torch.Tensor, placed: torch.Tensor) -> torch.Tensor:
+    """(B, G, G) occupancy map [y, x] of the macros flagged in `placed` (B, M)."""
+    xs = torch.arange(b.G).view(1, 1, 1, -1)
+    ys = torch.arange(b.G).view(1, 1, -1, 1)
+    x, y = anchors[..., 0, None, None], anchors[..., 1, None, None]
+    w, h = b.sizes[..., 0, None, None], b.sizes[..., 1, None, None]
+    inside = (xs >= x) & (xs < x + w) & (ys >= y) & (ys < y + h) & placed[..., None, None]
+    return inside.any(1).float()
 
 
-def congestion_maps(nl: Netlist, pos: np.ndarray, occ: np.ndarray):
-    """RUDY-style estimate: every net spreads its horizontal / vertical wire evenly over its
-    bounding box. Separate H and V demand, divided by the per-cell routing supply."""
-    G = nl.grid
-    H = np.zeros((G, G))
-    V = np.zeros((G, G))
-    for net in nl.nets:
-        p = pos[net]
-        x0, y0 = np.clip(np.floor(p.min(0)).astype(int), 0, G - 1)
-        x1, y1 = np.clip(np.floor(p.max(0) - 1e-9).astype(int), 0, G - 1)
-        x1, y1 = max(x0, x1), max(y0, y1)
-        w, h = x1 - x0 + 1, y1 - y0 + 1
-        H[y0:y1 + 1, x0:x1 + 1] += 1.0 / h   # total horizontal wire = w cells over w*h area
-        V[y0:y1 + 1, x0:x1 + 1] += 1.0 / w
-    cap = TRACKS_PER_CELL * (1.0 - MACRO_TRACK_FRACTION * occ)
-    return H / cap, V / cap
+def net_boxes(b: Batch, pos: torch.Tensor, placed: torch.Tensor):
+    """Bounding box of the placed pins of every net: lo, hi (B, E, 2) and pin count (B, E)."""
+    rows = b.rows[:, None, None]
+    ok = b.pin_ok & placed[rows, b.pins]
+    p = pos[rows, b.pins]                                    # B, E, K, 2
+    lo = torch.where(ok[..., None], p, torch.full_like(p, _FAR)).amin(2)
+    hi = torch.where(ok[..., None], p, torch.full_like(p, -_FAR)).amax(2)
+    return lo, hi, ok.sum(2)
 
 
-def congestion(nl: Netlist, pos: np.ndarray, occ: np.ndarray) -> float:
-    """Average of the top-10% most congested (cell, direction) values - the paper's ABA10-like proxy."""
-    H, V = congestion_maps(nl, pos, occ)
-    vals = np.sort(np.concatenate([H.ravel(), V.ravel()]))
-    k = max(1, len(vals) // 10)
-    return float(vals[-k:].mean())
+# ------------------------------------------------------------------------------ cost model
+def wirelength(b: Batch, lo, hi, count) -> torch.Tensor:
+    """Half-perimeter wirelength, normalised by (#nets * grid) as in the paper's eq. 5."""
+    span = (hi - lo).sum(-1) * (count >= 2)
+    return span.sum(1) / (b.n_nets * b.G)
 
 
-def placement_cost(nl: Netlist, anchors: np.ndarray) -> dict:
-    placed = np.ones(nl.n_nodes, dtype=bool)
-    pos = node_positions(nl, anchors)
-    occ = occupancy(nl, anchors, placed)
-    wl = hpwl(nl, pos)
-    cg = congestion(nl, pos, occ)
-    return {"cost": wl + CONGESTION_WEIGHT * cg, "wirelength": wl, "congestion": cg}
+def routing_demand(b: Batch, lo, hi, count):
+    """RUDY-style congestion estimate. Each net spreads its horizontal and its vertical wire
+    uniformly over its bounding box; returns demand maps H, V of shape (B, G, G).
+    Boxes are painted in O(1) each with a 2-D difference array + cumulative sums."""
+    G, S = b.G, b.G + 1
+    live = (count >= 2).float()
+    c0 = lo.floor().clamp(0, G - 1).long()
+    c1 = torch.maximum(hi.floor().clamp(0, G - 1).long(), c0)
+    x0, y0, x1, y1 = c0[..., 0], c0[..., 1], c1[..., 0] + 1, c1[..., 1] + 1
+    w, h = (x1 - x0).float(), (y1 - y0).float()
+
+    def paint(value):
+        value = value * live
+        d = torch.zeros(b.B, S * S)
+        d.scatter_add_(1, y0 * S + x0, value)
+        d.scatter_add_(1, y0 * S + x1, -value)
+        d.scatter_add_(1, y1 * S + x0, -value)
+        d.scatter_add_(1, y1 * S + x1, value)
+        return d.view(b.B, S, S).cumsum(1).cumsum(2)[:, :G, :G]
+
+    return paint(1.0 / h), paint(1.0 / w)   # w cells of horizontal wire spread over w*h cells
 
 
-def feasible_mask(occ: np.ndarray, w: int, h: int) -> np.ndarray:
-    """mask[y, x] = True if a w x h macro with lower-left corner at (x, y) fits without overlap."""
-    G = occ.shape[0]
-    S = np.zeros((G + 1, G + 1))
-    S[1:, 1:] = occ.cumsum(0).cumsum(1)
-    mask = np.zeros((G, G), dtype=bool)
-    ny, nx = G - h + 1, G - w + 1
-    if ny <= 0 or nx <= 0:
-        return mask
-    win = S[h:h + ny, w:w + nx] - S[0:ny, w:w + nx] - S[h:h + ny, 0:nx] + S[0:ny, 0:nx]
-    mask[:ny, :nx] = win < 0.5
-    return mask
+def utilisation(H, V, occ):
+    """Routing demand / supply per cell; macros take away part of the supply."""
+    supply = TRACKS_PER_CELL * (1.0 - MACRO_BLOCKAGE * occ)
+    return H / supply, V / supply
 
 
-def _box_blur(a: np.ndarray, r: int) -> np.ndarray:
-    G = a.shape[0]
-    p = np.pad(a, r)
-    S = np.zeros((G + 2 * r + 1, G + 2 * r + 1))
-    S[1:, 1:] = p.cumsum(0).cumsum(1)
-    k = 2 * r + 1
-    return (S[k:k + G, k:k + G] - S[0:G, k:k + G] - S[k:k + G, 0:G] + S[0:G, 0:G]) / (k * k)
+def congestion(H, V, occ) -> torch.Tensor:
+    uh, uv = utilisation(H, V, occ)
+    values = torch.cat([uh.flatten(1), uv.flatten(1)], dim=1)
+    k = max(1, int(TOP_FRACTION * values.shape[1]))
+    return values.topk(k, dim=1).values.mean(1)
 
 
-# ----------------------------------------------------------------------------- environment
+def evaluate(b: Batch, anchors: torch.Tensor) -> dict:
+    """Cost of complete placements. anchors: (B, M, 2) lower-left cell (x, y) of every macro."""
+    all_macros = torch.ones(b.B, b.M, dtype=torch.bool)
+    all_nodes = torch.ones(b.B, b.N, dtype=torch.bool)
+    occ = rasterize(b, anchors, all_macros)
+    lo, hi, count = net_boxes(b, centres(b, anchors), all_nodes)
+    wl = wirelength(b, lo, hi, count)
+    cg = congestion(*routing_demand(b, lo, hi, count), occ)
+    return {"cost": wl + LAMBDA_CONGESTION * cg, "wirelength": wl, "congestion": cg}
+
+
+def is_legal(b: Batch, anchors: torch.Tensor) -> torch.Tensor:
+    """(B,) True if every macro is inside the canvas and no two macros overlap."""
+    lo, hi = anchors, anchors + b.sizes
+    inside = ((lo >= 0) & (hi <= b.G)).all(-1).all(-1)
+    sep = (hi[:, :, None, :] <= lo[:, None, :, :]) | (hi[:, None, :, :] <= lo[:, :, None, :])
+    overlap = ~sep.any(-1)                                   # B, M, M
+    overlap = overlap & ~torch.eye(b.M, dtype=torch.bool)
+    return inside & ~overlap.flatten(1).any(1)
+
+
+# ------------------------------------------------------------------------------ per-step maps
+def feasible_mask(occ: torch.Tensor, w: torch.Tensor, h: torch.Tensor) -> torch.Tensor:
+    """mask[b, y, x]: a w[b] x h[b] macro with lower-left corner (x, y) fits on free cells."""
+    B, G, _ = occ.shape
+    S = G + 1
+    integral = torch.zeros(B, S, S)
+    integral[:, 1:, 1:] = occ.cumsum(1).cumsum(2)
+    xs = torch.arange(G).view(1, 1, G).expand(B, G, G)
+    ys = torch.arange(G).view(1, G, 1).expand(B, G, G)
+    x2, y2 = xs + w.view(B, 1, 1), ys + h.view(B, 1, 1)
+    fits = (x2 <= G) & (y2 <= G)
+    x2, y2 = x2.clamp(max=G), y2.clamp(max=G)
+    flat = integral.view(B, -1)
+
+    def at(y, x):
+        return flat.gather(1, (y * S + x).view(B, -1)).view(B, G, G)
+
+    covered = at(y2, x2) - at(ys, x2) - at(y2, xs) + at(ys, xs)
+    return fits & (covered < 0.5)
+
+
+def wire_mask(b: Batch, lo, hi, count, cur, w, h) -> torch.Tensor:
+    """(B, G, G) map: how much wirelength (in cells) the current macro would add if its corner
+    went to each cell, given the pins placed so far. This is the "wire mask" input feature of
+    MaskPlace (Lai et al., NeurIPS 2022); it is exact, cheap and separable in x and y."""
+    touches = ((b.pins == cur[:, None, None]) & b.pin_ok).any(2) & (count >= 1)   # B, E
+    axis = torch.arange(b.G).float()
+    out = []
+    for d, size in ((0, w), (1, h)):
+        c = (axis[None, :] + size[:, None].float() / 2)[:, None, :]              # B, 1, G
+        extra = (lo[..., d, None] - c).clamp(min=0) + (c - hi[..., d, None]).clamp(min=0)
+        out.append((extra * touches[..., None]).sum(1))                           # B, G
+    return out[1][:, :, None] + out[0][:, None, :]                                # [y, x]
+
+
+# ------------------------------------------------------------------------------ environment
 class PlacementEnv:
-    def __init__(self, nl: Netlist):
-        self.nl = nl
-        self.order = nl.placement_order()
-        self.A = nl.adjacency()
-        G = nl.grid
-        ys, xs = np.mgrid[0:G, 0:G]
-        self._coords = np.stack([xs / (G - 1), ys / (G - 1)]).astype(np.float32)
+    """B placement episodes running in lock-step (one macro per step)."""
+
+    def __init__(self, batch: Batch, use_wire_mask: bool = True):
+        self.b = batch
+        self.use_wire_mask = use_wire_mask
+        G = batch.G
+        self._xs = torch.arange(G).view(1, 1, G)
+        self._ys = torch.arange(G).view(1, G, 1)
+        self._coords = torch.stack([self._xs.expand(1, G, G), self._ys.expand(1, G, G)], 1).float() / (G - 1)
         self.reset()
 
-    def reset(self):
-        nl = self.nl
+    def reset(self) -> dict:
+        b = self.b
         self.t = 0
-        self.anchors = np.full((nl.n_macros, 2), -1, dtype=int)
-        self.placed = np.zeros(nl.n_nodes, dtype=bool)
-        self.placed[nl.n_macros:] = True  # ports are fixed
-        self.occ = np.zeros((nl.grid, nl.grid), dtype=np.float32)
+        self.anchors = torch.zeros(b.B, b.M, 2, dtype=torch.long)
+        self.placed = torch.zeros(b.B, b.N, dtype=torch.bool)
+        self.placed[:, b.M:] = True                      # ports are fixed
+        self.occ = torch.zeros(b.B, b.G, b.G)
         return self.observe()
 
     @property
-    def current(self) -> int:
-        return int(self.order[self.t])
-
-    @property
     def done(self) -> bool:
-        return self.t >= self.nl.n_macros
-
-    def mask(self) -> np.ndarray:
-        w, h = self.nl.sizes[self.current]
-        return feasible_mask(self.occ, w, h)
+        return self.t >= self.b.M
 
     def observe(self) -> dict:
-        nl, G = self.nl, self.nl.grid
-        cur = self.current if not self.done else 0
-        pos = node_positions(nl, np.maximum(self.anchors, 0))
+        b, G = self.b, self.b.G
+        cur = b.order[:, self.t]
+        wh = b.sizes[b.rows, cur]
+        w, h = wh[:, 0], wh[:, 1]
+        mask = feasible_mask(self.occ, w, h)
+        if not mask.flatten(1).any(1).all():
+            raise RuntimeError("dead end: a macro has no legal position left")
 
-        # Node features for the Edge-GNN: w, h, is_port, is_placed, x, y, is_current.
-        f = np.zeros((nl.n_nodes, 7), dtype=np.float32)
-        f[: nl.n_macros, 0:2] = nl.sizes / G
-        f[nl.n_macros:, 2] = 1.0
-        f[:, 3] = self.placed
-        f[:, 4:6] = np.where(self.placed[:, None], pos / G, 0.0)
-        f[cur, 6] = 1.0
+        pos = centres(b, self.anchors)
+        lo, hi, count = net_boxes(b, pos, self.placed)
+        wm = wire_mask(b, lo, hi, count, cur, w, h) / G if self.use_wire_mask else torch.zeros_like(self.occ)
+        uh, uv = utilisation(*routing_demand(b, lo, hi, count), self.occ)
 
-        # Image features for the CNN branch.
-        pull = np.zeros((G, G), dtype=np.float32)  # where the current macro's neighbours sit
-        for j in np.flatnonzero((self.A[cur] > 0) & self.placed):
-            x, y = np.clip(pos[j].astype(int), 0, G - 1)
-            pull[y, x] += self.A[cur, j]
-        mask = self.mask() if not self.done else np.zeros((G, G), dtype=bool)
-        w, h = nl.sizes[cur]
-        grid_obs = np.stack([
-            self.occ, mask.astype(np.float32), pull, _box_blur(pull, 2) * 4.0,
-            self._coords[0], self._coords[1],
-            np.full((G, G), w / G, np.float32), np.full((G, G), h / G, np.float32),
-        ]).astype(np.float32)
-        meta = np.array([self.t / nl.n_macros, w / G, h / G, self.occ.mean()], dtype=np.float32)
-        return {"nodes": f, "grid": grid_obs, "mask": mask.ravel(), "cur": cur, "meta": meta}
+        ones = torch.ones(b.B, G, G)
+        grid = torch.stack([
+            self.occ, mask.float(), wm, torch.maximum(uh, uv),
+            self._coords[:, 0].expand(b.B, G, G), self._coords[:, 1].expand(b.B, G, G),
+            ones * (w.view(-1, 1, 1) / G), ones * (h.view(-1, 1, 1) / G),
+        ], dim=1)
 
-    def step(self, action: int):
-        G = self.nl.grid
-        y, x = divmod(int(action), G)
-        m = self.current
-        w, h = self.nl.sizes[m]
-        assert self.mask()[y, x], "infeasible action"
-        self.anchors[m] = (x, y)
-        self.placed[m] = True
-        self.occ[y:y + h, x:x + w] = 1.0
+        nodes = torch.zeros(b.B, b.N, NODE_FEATURES)
+        nodes[:, : b.M, 0:2] = b.sizes.float() / G
+        nodes[:, b.M:, 2] = 1.0                                  # is_port
+        nodes[:, :, 3] = self.placed.float()
+        nodes[:, :, 4:6] = pos / G * self.placed[..., None]      # position, 0 if unplaced
+        nodes[b.rows, cur, 6] = 1.0                              # is the macro being placed
+        meta = torch.stack([torch.full((b.B,), self.t / b.M), w / G, h / G, self.occ.mean((1, 2))], 1)
+        return {"nodes": nodes, "adj": b.adj, "cur": cur, "meta": meta,
+                "grid": grid, "mask": mask.flatten(1)}
+
+    def step(self, action: torch.Tensor):
+        b, G = self.b, self.b.G
+        cur = b.order[:, self.t]
+        x, y = action % G, action // G
+        wh = b.sizes[b.rows, cur]
+        self.anchors[b.rows, cur] = torch.stack([x, y], 1)
+        self.placed[b.rows, cur] = True
+        x, y, w, h = (v.view(-1, 1, 1) for v in (x, y, wh[:, 0], wh[:, 1]))
+        rect = (self._xs >= x) & (self._xs < x + w) & (self._ys >= y) & (self._ys < y + h)
+        self.occ = torch.maximum(self.occ, rect.float())
         self.t += 1
-        if self.done:
-            c = placement_cost(self.nl, self.anchors)
-            return None, -c["cost"], True, c
-        return self.observe(), 0.0, False, {}
+        return None if self.done else self.observe()
+
+    def cost(self) -> dict:
+        assert self.done
+        return evaluate(self.b, self.anchors)

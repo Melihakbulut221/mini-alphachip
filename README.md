@@ -159,16 +159,6 @@ tests/test_env.py    vectorised cost model checked against naive loops
 - Y. Lai et al. *MaskPlace: Fast Chip Placement via Reinforced Visual Representation Learning.* NeurIPS 2022.
 - J. Schulman et al. *Proximal Policy Optimization Algorithms.* arXiv:1707.06347 (2017).
 
----
+## License
 
-### Türkçe özet
-
-Google'ın TPU çiplerinin yerleşim planlarında kullandığı AlphaChip yönteminin (Nature 2021)
-dizüstü bilgisayarda çalışan küçük bir yeniden üretimi. Ajan makroları ızgaraya tek tek
-yerleştiriyor, ödülü yalnızca en sonda alıyor: −(kablo uzunluğu + sıkışıklık). Politika
-Edge-GNN tabanlı, eğitim PPO ile. Bulgular: 64 çipte ön-eğitilen ajan, hiç görmediği bir çipte
-ilk 64 denemesinde, rastgele aramanın 12.800 denemede ulaşamadığı sonuca ulaşıyor; ama
-fine-tuning erken plato yapıyor ve nihai kalitede sıfırdan eğitilen ajan ile simulated
-annealing'in gerisinde kalıyor. Tam bütçede sıfırdan RL ile simulated annealing berabere.
-
-Built with Claude (Fable 5.2) as part of a weekend-project series. MIT License.
+MIT.
